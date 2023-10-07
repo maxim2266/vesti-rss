@@ -6,6 +6,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -61,7 +62,7 @@ func theApp() (err error) {
 	newsChan := startReader(maxItems)
 
 	// XML header
-	if err = writeString(xmlHeader); err != nil {
+	if err = writeString(xmlHeader, time.Now().Year()); err != nil {
 		return
 	}
 
@@ -127,6 +128,11 @@ func theApp() (err error) {
 		buff = buff[:0]
 	}
 
+	// check if the reader loop terminated as a result of a failure
+	if app.Failed() {
+		return errors.New("shutting down")
+	}
+
 	// XML footer
 	if err = writeString("</channel>\n</rss>\n"); err != nil {
 		return
@@ -138,9 +144,15 @@ func theApp() (err error) {
 
 const xmlHeader = xml.Header + `<rss version="2.0">
 <channel>
-  <title>vesti.ru Новости</title>
-  <link>` + server + `</link>
-  <description>Лента новостей</description>
+  <title>Новости</title>
+  <link>https://www.vesti.ru/news</link>
+  <description>Новости дня от Вести.Ru, интервью, репортажи, фото и видео, новости Москвы и регионов России, новости экономики, погода</description>
+  <copyright>© %d Сетевое издание &quot;Вести.Ру&quot;</copyright>
+  <image>
+    <link>https://www.vesti.ru/news</link>
+    <title>Новости</title>
+    <url>https://www.vesti.ru/i/logo_fb.png</url>
+  </image>
 `
 
 func write(data []byte) (err error) {
@@ -151,8 +163,14 @@ func write(data []byte) (err error) {
 	return
 }
 
-func writeString(data string) (err error) {
-	if _, err = os.Stdout.WriteString(data); err != nil {
+func writeString(data string, args ...any) (err error) {
+	if len(args) > 0 {
+		_, err = fmt.Printf(data, args...)
+	} else {
+		_, err = os.Stdout.WriteString(data)
+	}
+
+	if err != nil {
 		err = failure("writing to STDOUT", err)
 	}
 
