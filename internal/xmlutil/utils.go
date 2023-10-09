@@ -2,8 +2,8 @@ package xmlutil
 
 import "unicode/utf8"
 
-// Append appends the given text to the given byte slice with XML entities escaped
-func Append(dest []byte, text string) []byte {
+// AppendEscaped appends the given text to the given byte slice, with XML entities escaped
+func AppendEscaped(dest []byte, text string) []byte {
 	var esc string
 
 	last := 0
@@ -28,7 +28,7 @@ func Append(dest []byte, text string) []byte {
 				continue
 			}
 
-			esc = "\uFFFD"
+			esc = `\uFFFD`
 		}
 
 		dest = append(append(dest, text[last:i]...), esc...)
@@ -42,7 +42,7 @@ func Append(dest []byte, text string) []byte {
 // AppendTag appends the text eclosed in the tag to the byte slice, with XML entities escaped
 func AppendTag(dest []byte, tag, text string) []byte {
 	dest = append(append(append(dest, '<'), tag...), '>')
-	dest = Append(dest, text)
+	dest = AppendEscaped(dest, text)
 
 	return append(append(append(dest, "</"...), tag...), '>')
 }

@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"encoding/xml"
 	"errors"
 	"flag"
 	"fmt"
@@ -142,7 +141,8 @@ func theApp() (err error) {
 	return
 }
 
-const xmlHeader = xml.Header + `<rss version="2.0">
+const xmlHeader = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
 <channel>
   <title>Новости</title>
   <link>https://www.vesti.ru/news</link>

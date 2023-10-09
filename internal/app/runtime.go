@@ -77,28 +77,11 @@ func Run(fn func() error) {
 	// wait for all goroutines to terminate
 	wg.Wait()
 
-	// invoke AtExit handlers
-	for i := len(exitHandlers) - 1; i >= 0; i-- {
-		exitHandlers[i](Failed())
-	}
-
 	// exit
 	os.Exit(int(code.Load()))
 }
 
-// AtExit registers the given function for being called upon application exit.
-// All registered functions will be invoked in LIFO order, and each function
-// will be passed a flag indicating application failure.
-func AtExit(fn func(bool)) {
-	exitMutex.Lock()
-	defer exitMutex.Unlock()
-
-	exitHandlers = append(exitHandlers, fn)
-}
-
 var (
-	wg           sync.WaitGroup // wait group for all registered goroutines.
-	code         atomic.Int32   // application return code
-	exitMutex    sync.Mutex     // mutex for AtExit
-	exitHandlers []func(bool)   // stack of functions to call upon exit
+	wg   sync.WaitGroup // wait group for all registered goroutines.
+	code atomic.Int32   // application return code
 )
