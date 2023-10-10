@@ -28,7 +28,7 @@ func AppendEscaped(dest []byte, text string) []byte {
 				continue
 			}
 
-			esc = `\uFFFD`
+			esc = "\uFFFD"
 		}
 
 		dest = append(append(dest, text[last:i]...), esc...)

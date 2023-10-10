@@ -213,7 +213,7 @@ func startReader(n int) <-chan []NewsItem {
 			case ch <- batch:
 				// ok
 			case <-app.Shut():
-				return errors.New("batch reader thread stopped due to application shutdown")
+				return errors.New("news reader thread stopped due to application shutdown")
 			}
 		}
 
