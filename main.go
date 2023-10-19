@@ -120,6 +120,10 @@ func batchReader(yield func([]RawNewsItem) error) error {
 		}
 
 		// de-serialise response body
+		batch.Success = false
+		batch.Data = batch.Data[:0]
+		batch.Pagination.Next = ""
+
 		if err = json.Unmarshal(body, &batch); err != nil {
 			return failure("invalid response", err)
 		}
@@ -142,14 +146,10 @@ func batchReader(yield func([]RawNewsItem) error) error {
 		if err = yield(batch.Data); err != nil {
 			return err
 		}
-
-		// cleanup
-		batch.Success = false
-		batch.Data = batch.Data[:0]
 	}
 }
 
-// converter (pipeline stage)
+// converter constructor; returns a pipeline stage
 func convert(maxItems int) pump.S[[]RawNewsItem, *NewsItem] {
 	return func(src pump.G[[]RawNewsItem], yield func(*NewsItem) error) error {
 		// a set to detect duplicates and count items
@@ -363,6 +363,28 @@ func makeTS(d, t string) (time.Time, error) {
 	return time.Date(year, month, day, hour, minute, 0, 0, msk).UTC(), nil
 }
 
+var (
+	monthMap = map[string]time.Month{
+		"января":   time.January,
+		"февраля":  time.February,
+		"марта":    time.March,
+		"апреля":   time.April,
+		"мая":      time.May,
+		"июня":     time.June,
+		"июля":     time.July,
+		"августа":  time.August,
+		"сентября": time.September,
+		"октября":  time.October,
+		"ноября":   time.November,
+		"декабря":  time.December,
+	}
+
+	matchDate = regexp.MustCompile(`^((?:0?[1-9])|(?:[1-2][0-9])|(?:3[01]))[[:blank:]]+(\p{Cyrillic}+)[[:blank:]]+(20[[:digit:]]{2})$`).FindStringSubmatch
+	matchTime = regexp.MustCompile(`^((?:[01][0-9])|(?:2[0-3])):([0-5][0-9])$`).FindStringSubmatch
+
+	msk *time.Location
+)
+
 // output writers
 func write(data []byte) (err error) {
 	if _, err = os.Stdout.Write(data); err != nil {
@@ -385,28 +407,6 @@ func writeString(data string, args ...any) (err error) {
 
 	return
 }
-
-var (
-	monthMap = map[string]time.Month{
-		"января":   time.January,
-		"февраля":  time.February,
-		"марта":    time.March,
-		"апреля":   time.April,
-		"мая":      time.May,
-		"июня":     time.June,
-		"июля":     time.July,
-		"августа":  time.August,
-		"сентября": time.September,
-		"октября":  time.October,
-		"ноября":   time.November,
-		"декабря":  time.December,
-	}
-
-	matchDate = regexp.MustCompile(`^((?:0?[1-9])|(?:[1-2][0-9])|(?:3[01]))[[:blank:]]+(\p{Cyrillic}+)[[:blank:]]+(20[[:digit:]]{2})$`).FindStringSubmatch
-	matchTime = regexp.MustCompile(`^((?:[01][0-9])|(?:2[0-3])):([0-5][0-9])$`).FindStringSubmatch
-
-	msk *time.Location
-)
 
 // compose error message from a prefix and an error
 func failure(prefix string, err error) error {
