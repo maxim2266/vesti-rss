@@ -16,6 +16,8 @@ import (
 
 	"vesti-rss/internal/app"
 	"vesti-rss/internal/xmlutil"
+
+	"github.com/maxim2266/pump"
 )
 
 // news server
@@ -57,88 +59,193 @@ func theApp() (err error) {
 		return errors.New("invalid number of items: " + strconv.Itoa(maxItems))
 	}
 
-	// start news reader
-	newsChan := startReader(maxItems)
+	// run
+	return writeXML(pump.Bind(batchReader, convert(maxItems)))
+}
 
-	// XML header
-	if err = writeString(xmlHeader, time.Now().Year()); err != nil {
-		return
+// raw news item
+type RawNewsItem struct {
+	ID                uint64
+	Title, Anons, URL string
+
+	DatePub struct {
+		Day, Time string
+	}
+}
+
+// news item
+type NewsItem struct {
+	id                uint64
+	title, text, link string
+	ts                time.Time
+}
+
+// batch reader (pipeline source)
+func batchReader(yield func([]RawNewsItem) error) error {
+	// HTTP client
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+		Transport: &http.Transport{
+			MaxIdleConns:    1,
+			MaxConnsPerHost: 1,
+			IdleConnTimeout: 20 * time.Second,
+		},
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
 	}
 
-	// a set to detect duplicate items
-	seen := make(map[uint64]struct{}, maxItems+20)
+	// response receiver
+	var batch struct {
+		Success bool
+		Data    []RawNewsItem
+
+		Pagination struct {
+			Next string
+		}
+	}
+
+	// first page URL
+	batch.Pagination.Next = server + "/api/news"
+
+	// batch reader loop
+	for {
+		app.Info("reading page from " + batch.Pagination.Next)
+
+		// make request
+		body, err := getResponse(batch.Pagination.Next, client)
+
+		if err != nil {
+			return err
+		}
+
+		// de-serialise response body
+		if err = json.Unmarshal(body, &batch); err != nil {
+			return failure("invalid response", err)
+		}
+
+		// validate the response
+		if !batch.Success {
+			return errors.New("response indicates an error")
+		}
+
+		if len(batch.Data) == 0 {
+			return errors.New("response contains no news")
+		}
+
+		// next page URL
+		if batch.Pagination.Next, err = makeURL(batch.Pagination.Next); err != nil {
+			return failure("next page URL", err)
+		}
+
+		// pump
+		if err = yield(batch.Data); err != nil {
+			return err
+		}
+
+		// cleanup
+		batch.Success = false
+		batch.Data = batch.Data[:0]
+	}
+}
+
+// converter (pipeline stage)
+func convert(maxItems int) pump.S[[]RawNewsItem, *NewsItem] {
+	return func(src pump.G[[]RawNewsItem], yield func(*NewsItem) error) error {
+		// a set to detect duplicates and count items
+		seen := make(map[uint64]struct{}, maxItems+20)
+
+		return src(func(batch []RawNewsItem) (err error) {
+			for _, item := range batch {
+				// check for duplicate
+				if _, yes := seen[item.ID]; yes {
+					app.Warn("skipped a duplicate of the news item %d", item.ID)
+					continue
+				}
+
+				// news item
+				news := NewsItem{
+					id:    item.ID,
+					title: item.Title,
+					text:  item.Anons,
+				}
+
+				// make link
+				if news.link, err = makeURL(item.URL); err != nil {
+					app.Warn("skipped news item %d: %s", item.ID, err)
+					continue
+				}
+
+				// make timestamp
+				if news.ts, err = makeTS(item.DatePub.Day, item.DatePub.Time); err != nil {
+					app.Warn("skipped news item %d: %s", item.ID, err)
+					continue
+				}
+
+				seen[item.ID] = struct{}{}
+
+				// pump
+				if err = yield(&news); err != nil {
+					return
+				}
+			}
+
+			// check if we've got enough news
+			if len(seen) >= maxItems {
+				app.Info("processed %d news items.", len(seen))
+				err = io.EOF
+			}
+
+			return
+		})
+	}
+}
+
+// RSS XML writer
+func writeXML(src pump.G[*NewsItem]) error {
+	// XML header
+	if err := writeString(xmlHeader, time.Now().Year()); err != nil {
+		return err
+	}
 
 	// buffer
 	buff := make([]byte, 0, 8*1024)
 
-	// news reader loop
-	for batch := range newsChan {
-		for _, item := range batch {
-			// check for duplicate
-			if _, yes := seen[item.ID]; yes {
-				app.Warn("skipped a duplicate of the news item %d", item.ID)
-				continue
-			}
-
-			// check link
-			var link string
-
-			if link, err = makeURL(item.URL); err != nil {
-				app.Warn("skipped news item with id %d: %s", item.ID, err)
-				continue
-			}
-
-			// check timestamp
-			var ts time.Time
-
-			if ts, err = makeTS(item.DatePub.Day, item.DatePub.Time); err != nil {
-				app.Warn("skipped news item with id %d: %s", item.ID, err)
-				continue
-			}
-
-			// serialise the item
-			buff = append(buff, "<item>"...)
-
-			// title
-			buff = xmlutil.AppendTag(buff, "title", item.Title)
-
-			// description
-			buff = xmlutil.AppendTag(buff, "description", item.Anons)
-
-			// link
-			buff = xmlutil.AppendTag(buff, "link", link)
-
-			// GUID
-			buff = append(strconv.AppendUint(append(buff, `<guid isPermaLink="false">`...), item.ID, 10), "</guid>"...)
-
-			// timestamp
-			buff = append(ts.AppendFormat(append(buff, "<pubDate>"...), time.RFC1123Z), "</pubDate>"...)
-
-			// item complete
-			buff = append(buff, "</item>\n"...)
-			seen[item.ID] = struct{}{}
-		}
-
-		// write out
-		if err = write(buff); err != nil {
-			return
-		}
-
+	// news items
+	err := src(func(news *NewsItem) error {
 		buff = buff[:0]
-	}
 
-	// check if the reader loop terminated as a result of a failure
-	if app.Failed() {
-		return errors.New("shutting down")
+		// open item tag
+		buff = append(buff, "<item>"...)
+
+		// title
+		buff = xmlutil.AppendTag(buff, "title", news.title)
+
+		// description
+		buff = xmlutil.AppendTag(buff, "description", news.text)
+
+		// link
+		buff = xmlutil.AppendTag(buff, "link", news.link)
+
+		// GUID
+		buff = append(strconv.AppendUint(append(buff, `<guid isPermaLink="false">`...), news.id, 10), "</guid>"...)
+
+		// timestamp
+		buff = append(news.ts.AppendFormat(append(buff, "<pubDate>"...), time.RFC1123Z), "</pubDate>"...)
+
+		// close item tag
+		buff = append(buff, "</item>\n"...)
+
+		// write
+		return write(buff)
+	})
+
+	if err != io.EOF {
+		return err
 	}
 
 	// XML footer
-	if err = writeString("</channel>\n</rss>\n"); err != nil {
-		return
-	}
-
-	app.Info("processed %d news items.", len(seen))
-	return
+	return writeString("</channel>\n</rss>\n")
 }
 
 const xmlHeader = `<?xml version="1.0" encoding="UTF-8"?>
@@ -154,138 +261,6 @@ const xmlHeader = `<?xml version="1.0" encoding="UTF-8"?>
     <url>https://www.vesti.ru/i/logo_fb.png</url>
   </image>
 `
-
-func write(data []byte) (err error) {
-	if _, err = os.Stdout.Write(data); err != nil {
-		err = failure("writing to STDOUT", err)
-	}
-
-	return
-}
-
-func writeString(data string, args ...any) (err error) {
-	if len(args) > 0 {
-		_, err = fmt.Printf(data, args...)
-	} else {
-		_, err = os.Stdout.WriteString(data)
-	}
-
-	if err != nil {
-		err = failure("writing to STDOUT", err)
-	}
-
-	return
-}
-
-// news item
-type NewsItem struct {
-	ID                uint64
-	Title, Anons, URL string
-
-	DatePub struct {
-		Day, Time string
-	}
-}
-
-// news reader constructor
-func startReader(n int) <-chan []NewsItem {
-	ch := make(chan []NewsItem, 10)
-
-	app.Go(func() error {
-		defer close(ch)
-
-		// batch reader function
-		next := newBatchReader()
-
-		// batch reader loop
-		for n > 0 {
-			// next batch
-			batch, err := next()
-
-			if err != nil {
-				return err
-			}
-
-			n -= len(batch)
-
-			// feed the channel
-			select {
-			case ch <- batch:
-				// ok
-			case <-app.Shut():
-				return errors.New("news reader thread stopped due to application shutdown")
-			}
-		}
-
-		app.Info("news reader thread has completed")
-		return nil
-	})
-
-	app.Info("news reader thread started")
-	return ch
-}
-
-// batch reader constructor
-func newBatchReader() func() ([]NewsItem, error) {
-	// HTTP client
-	client := &http.Client{
-		Timeout: 5 * time.Second,
-		Transport: &http.Transport{
-			MaxIdleConns:    1,
-			MaxConnsPerHost: 1,
-			IdleConnTimeout: 20 * time.Second,
-		},
-		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
-
-	// request URL
-	reqURL := server + "/api/news"
-
-	// the next() function
-	return func() ([]NewsItem, error) {
-		app.Info("reading page from " + reqURL)
-
-		// make request
-		body, err := getResponse(reqURL, client)
-
-		if err != nil {
-			return nil, err
-		}
-
-		// de-serialise response body
-		var batch struct {
-			Success bool
-			Data    []NewsItem
-
-			Pagination struct {
-				Next string
-			}
-		}
-
-		if err = json.Unmarshal(body, &batch); err != nil {
-			return nil, failure("invalid response", err)
-		}
-
-		// validate the response
-		if !batch.Success {
-			return nil, errors.New("response indicates an error")
-		}
-
-		if len(batch.Data) == 0 {
-			return nil, errors.New("response contains no news")
-		}
-
-		// next page URL
-		if reqURL, err = makeURL(batch.Pagination.Next); err != nil {
-			return nil, failure("next page URL", err)
-		}
-
-		// all done
-		return batch.Data, nil
-	}
-}
 
 // make HTTP request and return the response body
 func getResponse(reqURL string, client *http.Client) ([]byte, error) {
@@ -386,6 +361,29 @@ func makeTS(d, t string) (time.Time, error) {
 
 	// construct timesatmp object
 	return time.Date(year, month, day, hour, minute, 0, 0, msk).UTC(), nil
+}
+
+// output writers
+func write(data []byte) (err error) {
+	if _, err = os.Stdout.Write(data); err != nil {
+		err = failure("writing to STDOUT", err)
+	}
+
+	return
+}
+
+func writeString(data string, args ...any) (err error) {
+	if len(args) > 0 {
+		_, err = fmt.Printf(data, args...)
+	} else {
+		_, err = os.Stdout.WriteString(data)
+	}
+
+	if err != nil {
+		err = failure("writing to STDOUT", err)
+	}
+
+	return
 }
 
 var (
