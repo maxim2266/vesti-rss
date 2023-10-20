@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
-	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -206,7 +205,7 @@ func converter(maxItems int) pump.S[[]RawNewsItem, *NewsItem] {
 // RSS XML writer
 func writeXML(src pump.G[*NewsItem]) error {
 	// XML header
-	if err := writeString(xmlHeader, time.Now().Year()); err != nil {
+	if err := writeString(xmlHeader); err != nil {
 		return err
 	}
 
@@ -250,13 +249,13 @@ func writeXML(src pump.G[*NewsItem]) error {
 	return writeString("</channel>\n</rss>\n")
 }
 
-const xmlHeader = `<?xml version="1.0" encoding="UTF-8"?>
+var xmlHeader = `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0">
 <channel>
   <title>Новости</title>
   <link>https://www.vesti.ru/news</link>
   <description>Новости дня от Вести.Ru, интервью, репортажи, фото и видео, новости Москвы и регионов России, новости экономики, погода</description>
-  <copyright>© %d Сетевое издание &quot;Вести.Ру&quot;</copyright>
+  <copyright>© ` + strconv.Itoa(time.Now().Year()) + ` Сетевое издание &quot;Вести.Ру&quot;</copyright>
   <image>
     <link>https://www.vesti.ru/news</link>
     <title>Новости</title>
@@ -396,14 +395,8 @@ func write(data []byte) (err error) {
 	return
 }
 
-func writeString(data string, args ...any) (err error) {
-	if len(args) > 0 {
-		_, err = fmt.Printf(data, args...)
-	} else {
-		_, err = os.Stdout.WriteString(data)
-	}
-
-	if err != nil {
+func writeString(data string) (err error) {
+	if _, err = os.Stdout.WriteString(data); err != nil {
 		err = failure("writing to STDOUT", err)
 	}
 
