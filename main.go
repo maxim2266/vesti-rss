@@ -60,7 +60,7 @@ func theApp() (err error) {
 	}
 
 	// run
-	return writeXML(pump.Bind(batchReader, convert(maxItems)))
+	return writeXML(pump.Bind(batchReader, converter(maxItems)))
 }
 
 // raw news item
@@ -150,12 +150,12 @@ func batchReader(yield func([]RawNewsItem) error) error {
 }
 
 // converter constructor; returns a pipeline stage
-func convert(maxItems int) pump.S[[]RawNewsItem, *NewsItem] {
+func converter(maxItems int) pump.S[[]RawNewsItem, *NewsItem] {
 	return func(src pump.G[[]RawNewsItem], yield func(*NewsItem) error) error {
 		// a set to detect duplicates and count items
 		seen := make(map[uint64]struct{}, maxItems+20)
 
-		return src(func(batch []RawNewsItem) (err error) {
+		return src(func(batch []RawNewsItem) error {
 			for _, item := range batch {
 				// check for duplicate
 				if _, yes := seen[item.ID]; yes {
@@ -171,6 +171,8 @@ func convert(maxItems int) pump.S[[]RawNewsItem, *NewsItem] {
 				}
 
 				// make link
+				var err error
+
 				if news.link, err = makeURL(item.URL); err != nil {
 					app.Warn("skipped news item %d: %s", item.ID, err)
 					continue
@@ -186,17 +188,17 @@ func convert(maxItems int) pump.S[[]RawNewsItem, *NewsItem] {
 
 				// pump
 				if err = yield(&news); err != nil {
-					return
+					return err
 				}
 			}
 
 			// check if we've got enough news
 			if len(seen) >= maxItems {
 				app.Info("processed %d news items.", len(seen))
-				err = io.EOF
+				return io.EOF
 			}
 
-			return
+			return nil
 		})
 	}
 }
