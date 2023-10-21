@@ -40,11 +40,11 @@ func theApp() (err error) {
 
 	// read flags
 	var (
-		maxItems int
+		numItems int
 		logLevel string
 	)
 
-	flag.IntVar(&maxItems, "max-items", 100, "number of news items to fetch, any value from 1 to 500")
+	flag.IntVar(&numItems, "num-items", 100, "number of news items to fetch, from 1 to 500; the actual number will be rounded up to the page size")
 	flag.StringVar(&logLevel, "log-level", "error", "logging level, one of: trace, info, warning, error")
 
 	flag.Parse()
@@ -54,12 +54,12 @@ func theApp() (err error) {
 		return
 	}
 
-	if maxItems < 1 || maxItems > 500 {
-		return errors.New("invalid number of items: " + strconv.Itoa(maxItems))
+	if numItems < 1 || numItems > 500 {
+		return errors.New("invalid number of items: " + strconv.Itoa(numItems))
 	}
 
 	// run
-	return writeXML(pump.Bind(batchReader, converter(maxItems)))
+	return writeXML(pump.Bind(batchReader, converter(numItems)))
 }
 
 // raw news item
@@ -149,10 +149,10 @@ func batchReader(yield func([]RawNewsItem) error) error {
 }
 
 // converter constructor; returns a pipeline stage
-func converter(maxItems int) pump.S[[]RawNewsItem, *NewsItem] {
+func converter(numItems int) pump.S[[]RawNewsItem, *NewsItem] {
 	return func(src pump.G[[]RawNewsItem], yield func(*NewsItem) error) error {
 		// a set to detect duplicates and count items
-		seen := make(map[uint64]struct{}, maxItems+20)
+		seen := make(map[uint64]struct{}, numItems+20)
 
 		return src(func(batch []RawNewsItem) error {
 			for _, item := range batch {
@@ -192,7 +192,7 @@ func converter(maxItems int) pump.S[[]RawNewsItem, *NewsItem] {
 			}
 
 			// check if we've got enough news
-			if len(seen) >= maxItems {
+			if len(seen) >= numItems {
 				app.Info("processed %d news items.", len(seen))
 				return io.EOF
 			}
@@ -214,10 +214,8 @@ func writeXML(src pump.G[*NewsItem]) error {
 
 	// news items
 	err := src(func(news *NewsItem) error {
-		buff = buff[:0]
-
 		// open item tag
-		buff = append(buff, "<item>"...)
+		buff = append(buff[:0], "<item>"...)
 
 		// title
 		buff = xmlutil.AppendTag(buff, "title", news.title)
