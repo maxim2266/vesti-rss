@@ -240,6 +240,10 @@ func writeXML(src pump.G[*NewsItem]) error {
 	})
 
 	if err != io.EOF {
+		if err == nil {
+			return errors.New("unexpected nil error")
+		}
+
 		return err
 	}
 
