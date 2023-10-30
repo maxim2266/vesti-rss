@@ -357,7 +357,7 @@ func makeTS(d, t string) (time.Time, error) {
 	hour, _ := strconv.Atoi(m[1])
 	minute, _ := strconv.Atoi(m[2])
 
-	// construct timesatmp object
+	// construct timestamp object
 	return time.Date(year, month, day, hour, minute, 0, 0, msk).UTC(), nil
 }
 
