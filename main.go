@@ -59,7 +59,7 @@ func theApp() (err error) {
 	}
 
 	// run
-	return writeXML(pump.Bind(batchReader, converter(numItems)))
+	return writeXML(pump.Bind(source(numItems), converter))
 }
 
 // raw news item
@@ -79,127 +79,126 @@ type NewsItem struct {
 	ts                time.Time
 }
 
-// batch reader (pipeline source)
-func batchReader(yield func([]RawNewsItem) error) error {
-	// HTTP client
-	client := &http.Client{
-		Timeout: 5 * time.Second,
-		Transport: &http.Transport{
-			MaxIdleConns:    1,
-			MaxConnsPerHost: 1,
-			IdleConnTimeout: 20 * time.Second,
-		},
-		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
-
-	// response receiver
-	var batch struct {
-		Success bool
-		Data    []RawNewsItem
-
-		Pagination struct {
-			Next string
-		}
-	}
-
-	// first page URL
-	batch.Pagination.Next = server + "/api/news"
-
-	// batch reader loop
-	for {
-		app.Info("reading page from " + batch.Pagination.Next)
-
-		// make request
-		body, err := getResponse(batch.Pagination.Next, client)
-
-		if err != nil {
-			return err
+// news reader source (generator constructor)
+func source(numItems int) pump.G[*RawNewsItem] {
+	return func(yield func(*RawNewsItem) error) error {
+		// HTTP client
+		client := &http.Client{
+			Timeout: 5 * time.Second,
+			Transport: &http.Transport{
+				MaxIdleConns:    1,
+				MaxConnsPerHost: 1,
+				IdleConnTimeout: 20 * time.Second,
+			},
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
 		}
 
-		// de-serialise response body
-		batch.Success = false
-		batch.Data = batch.Data[:0]
-		batch.Pagination.Next = ""
+		// response receiver
+		var batch struct {
+			Success bool
+			Data    []RawNewsItem
 
-		if err = json.Unmarshal(body, &batch); err != nil {
-			return failure("invalid response", err)
+			Pagination struct {
+				Next string
+			}
 		}
 
-		// validate the response
-		if !batch.Success {
-			return errors.New("response indicates an error")
-		}
+		// first page URL
+		batch.Pagination.Next = server + "/api/news"
 
-		if len(batch.Data) == 0 {
-			return errors.New("response contains no news")
-		}
-
-		// next page URL
-		if batch.Pagination.Next, err = makeURL(batch.Pagination.Next); err != nil {
-			return failure("next page URL", err)
-		}
-
-		// pump
-		if err = yield(batch.Data); err != nil {
-			return err
-		}
-	}
-}
-
-// converter constructor; returns a pipeline stage
-func converter(numItems int) pump.S[[]RawNewsItem, *NewsItem] {
-	return func(src pump.G[[]RawNewsItem], yield func(*NewsItem) error) error {
 		// a set to detect duplicates and count items
 		seen := make(map[uint64]struct{}, numItems+20)
 
-		return src(func(batch []RawNewsItem) error {
-			for _, item := range batch {
+		// batch reader loop
+		for {
+			app.Info("reading page from " + batch.Pagination.Next)
+
+			// make request
+			body, err := getResponse(batch.Pagination.Next, client)
+
+			if err != nil {
+				return err
+			}
+
+			// de-serialise response body
+			batch.Success = false
+			batch.Data = batch.Data[:0]
+			batch.Pagination.Next = ""
+
+			if err = json.Unmarshal(body, &batch); err != nil {
+				return failure("invalid response", err)
+			}
+
+			// validate the response
+			if !batch.Success {
+				return errors.New("response indicates an error")
+			}
+
+			if len(batch.Data) == 0 {
+				return errors.New("response contains no news")
+			}
+
+			// next page URL
+			if batch.Pagination.Next, err = makeURL(batch.Pagination.Next); err != nil {
+				return failure("next page URL", err)
+			}
+
+			// loop over the news batch
+			for i := range batch.Data {
+				item := &batch.Data[i]
+
 				// check for duplicate
 				if _, yes := seen[item.ID]; yes {
 					app.Warn("skipped a duplicate of the news item %d", item.ID)
 					continue
 				}
 
-				// news item
-				news := NewsItem{
-					id:    item.ID,
-					title: item.Title,
-					text:  item.Anons,
-				}
-
-				// make link
-				var err error
-
-				if news.link, err = makeURL(item.URL); err != nil {
-					app.Warn("skipped news item %d: %s", item.ID, err)
-					continue
-				}
-
-				// make timestamp
-				if news.ts, err = makeTS(item.DatePub.Day, item.DatePub.Time); err != nil {
-					app.Warn("skipped news item %d: %s", item.ID, err)
-					continue
-				}
-
-				seen[item.ID] = struct{}{}
-
-				// pump
-				if err = yield(&news); err != nil {
+				// yield
+				if err = yield(item); err != nil {
 					return err
 				}
+
+				// mark as seen
+				seen[item.ID] = struct{}{}
 			}
 
 			// check if we've got enough news
 			if len(seen) >= numItems {
 				app.Info("processed %d news items.", len(seen))
-				return io.EOF
+				return nil
 			}
-
-			return nil
-		})
+		}
 	}
+}
+
+// converter (a pipeline stage)
+func converter(src pump.G[*RawNewsItem], yield func(*NewsItem) error) error {
+	return src(func(item *RawNewsItem) error {
+		// news item
+		news := NewsItem{
+			id:    item.ID,
+			title: item.Title,
+			text:  item.Anons,
+		}
+
+		// make link
+		var err error
+
+		if news.link, err = makeURL(item.URL); err != nil {
+			app.Warn("skipped news item %d: %s", item.ID, err)
+			return nil // skip
+		}
+
+		// make timestamp
+		if news.ts, err = makeTS(item.DatePub.Day, item.DatePub.Time); err != nil {
+			app.Warn("skipped news item %d: %s", item.ID, err)
+			return nil // skip
+		}
+
+		return yield(&news)
+	})
 }
 
 // RSS XML writer
@@ -239,11 +238,7 @@ func writeXML(src pump.G[*NewsItem]) error {
 		return write(buff)
 	})
 
-	if err != io.EOF {
-		if err == nil {
-			return errors.New("unexpected nil error")
-		}
-
+	if err != nil {
 		return err
 	}
 
