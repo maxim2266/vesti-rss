@@ -39,14 +39,6 @@ func AppendEscaped(dest []byte, text string) []byte {
 	return append(dest, text[last:]...)
 }
 
-// AppendTag appends the text eclosed in the tag to the byte slice, with XML entities escaped
-func AppendTag(dest []byte, tag, text string) []byte {
-	dest = append(append(append(dest, '<'), tag...), '>')
-	dest = AppendEscaped(dest, text)
-
-	return append(append(append(dest, "</"...), tag...), '>')
-}
-
 // check if the rune is a valid XML character, as in section 2.2 of https://www.xml.com/axml/testaxml.htm
 func isValidXmlChar(r rune) bool {
 	return r == 0x09 ||

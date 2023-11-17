@@ -209,30 +209,25 @@ func writeXML(src pump.G[*NewsItem]) error {
 	}
 
 	// buffer
-	buff := make([]byte, 0, 8*1024)
+	buff := append(make([]byte, 0, 8*1024), "<item><title>"...)
+	n := len(buff)
 
 	// news items
 	err := src(func(news *NewsItem) error {
-		// open item tag
-		buff = append(buff[:0], "<item>"...)
-
 		// title
-		buff = xmlutil.AppendTag(buff, "title", news.title)
+		buff = append(xmlutil.AppendEscaped(buff[:n], news.title), "</title><description>"...)
 
 		// description
-		buff = xmlutil.AppendTag(buff, "description", news.text)
+		buff = append(xmlutil.AppendEscaped(buff, news.text), "</description><link>"...)
 
 		// link
-		buff = xmlutil.AppendTag(buff, "link", news.link)
+		buff = append(xmlutil.AppendEscaped(buff, news.link), `</link><guid isPermaLink="false">`...)
 
 		// GUID
-		buff = append(strconv.AppendUint(append(buff, `<guid isPermaLink="false">`...), news.id, 10), "</guid>"...)
+		buff = append(strconv.AppendUint(buff, news.id, 10), "</guid><pubDate>"...)
 
 		// timestamp
-		buff = append(news.ts.AppendFormat(append(buff, "<pubDate>"...), time.RFC1123Z), "</pubDate>"...)
-
-		// close item tag
-		buff = append(buff, "</item>\n"...)
+		buff = append(news.ts.AppendFormat(buff, time.RFC1123Z), "</pubDate></item>\n"...)
 
 		// write
 		return write(buff)
