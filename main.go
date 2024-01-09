@@ -202,10 +202,10 @@ func converter(src pump.G[*RawNewsItem], yield func(*NewsItem) error) error {
 }
 
 // RSS XML writer
-func writeXML(src pump.G[*NewsItem]) error {
+func writeXML(src pump.G[*NewsItem]) (err error) {
 	// XML header
-	if err := writeString(xmlHeader); err != nil {
-		return err
+	if err = writeString(xmlHeader); err != nil {
+		return
 	}
 
 	// buffer
@@ -213,7 +213,7 @@ func writeXML(src pump.G[*NewsItem]) error {
 	n := len(buff)
 
 	// news items
-	err := src(func(news *NewsItem) error {
+	err = src(func(news *NewsItem) error {
 		// title
 		buff = append(xmlutil.AppendEscaped(buff[:n], news.title), "</title><description>"...)
 
@@ -233,12 +233,12 @@ func writeXML(src pump.G[*NewsItem]) error {
 		return write(buff)
 	})
 
-	if err != nil {
-		return err
+	if err == nil {
+		// XML footer
+		err = writeString("</channel>\n</rss>\n")
 	}
 
-	// XML footer
-	return writeString("</channel>\n</rss>\n")
+	return
 }
 
 var xmlHeader = `<?xml version="1.0" encoding="UTF-8"?>
