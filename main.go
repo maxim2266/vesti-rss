@@ -240,8 +240,8 @@ func (wr *xmlWriter) Do(news *NewsItem) error {
 }
 
 // XML writer completion function
-func (wr *xmlWriter) Close(ok bool) (err error) {
-	if ok {
+func (wr *xmlWriter) Close(status pump.Status) (err error) {
+	if status == pump.StatusOK {
 		// XML footer
 		err = writeString("</channel>\n</rss>\n")
 	}
