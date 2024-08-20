@@ -1,5 +1,5 @@
 module vesti-rss
 
-go 1.21.1
+go 1.23
 
-require github.com/maxim2266/pump v0.5.0
+require github.com/maxim2266/pump v0.6.0

@@ -58,8 +58,46 @@ func theApp() (err error) {
 		return errors.New("invalid number of items: " + strconv.Itoa(numItems))
 	}
 
-	// run
-	return pump.RunPipe(source(numItems), converter, writer)
+	// XML header
+	if err = writeString(xmlHeader); err != nil {
+		return
+	}
+
+	// buffer
+	buff := append(make([]byte, 0, 8*1024), xmlPrefix...)
+
+	// pipeline
+	src := pump.From(pump.Bind(source(numItems), converter))
+
+	// read the news and write out XML
+	for news := range src.All {
+		// title
+		buff = append(xmlutil.AppendEscaped(buff[:xmlPrefixLen], news.title), "</title><description>"...)
+
+		// description
+		buff = append(xmlutil.AppendEscaped(buff, news.text), "</description><link>"...)
+
+		// link
+		buff = append(xmlutil.AppendEscaped(buff, news.link), `</link><guid isPermaLink="false">`...)
+
+		// GUID
+		buff = append(strconv.AppendUint(buff, news.id, 10), "</guid><pubDate>"...)
+
+		// timestamp
+		buff = append(news.ts.AppendFormat(buff, time.RFC1123Z), "</pubDate></item>\n"...)
+
+		// write
+		if err = write(buff); err != nil {
+			return
+		}
+	}
+
+	if src.Err != nil {
+		return src.Err
+	}
+
+	// XML footer
+	return writeString("</channel>\n</rss>\n")
 }
 
 // raw news item
@@ -199,54 +237,6 @@ func converter(src pump.Gen[*RawNewsItem], yield func(*NewsItem) error) error {
 
 		return yield(&news)
 	})
-}
-
-// RSS XML writer
-type xmlWriter struct {
-	buff []byte
-}
-
-// XML writer constructor
-func writer() (pump.Sink[*NewsItem], error) {
-	// XML header
-	if err := writeString(xmlHeader); err != nil {
-		return nil, err
-	}
-
-	return &xmlWriter{
-		buff: append(make([]byte, 0, 8*1024), xmlPrefix...),
-	}, nil
-}
-
-// XML writer item processor
-func (wr *xmlWriter) Do(news *NewsItem) error {
-	// title
-	wr.buff = append(xmlutil.AppendEscaped(wr.buff[:xmlPrefixLen], news.title), "</title><description>"...)
-
-	// description
-	wr.buff = append(xmlutil.AppendEscaped(wr.buff, news.text), "</description><link>"...)
-
-	// link
-	wr.buff = append(xmlutil.AppendEscaped(wr.buff, news.link), `</link><guid isPermaLink="false">`...)
-
-	// GUID
-	wr.buff = append(strconv.AppendUint(wr.buff, news.id, 10), "</guid><pubDate>"...)
-
-	// timestamp
-	wr.buff = append(news.ts.AppendFormat(wr.buff, time.RFC1123Z), "</pubDate></item>\n"...)
-
-	// write
-	return write(wr.buff)
-}
-
-// XML writer completion function
-func (wr *xmlWriter) Close(status pump.Status) (err error) {
-	if status == pump.StatusOK {
-		// XML footer
-		err = writeString("</channel>\n</rss>\n")
-	}
-
-	return
 }
 
 var xmlHeader = `<?xml version="1.0" encoding="UTF-8"?>
