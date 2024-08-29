@@ -66,11 +66,8 @@ func theApp() (err error) {
 	// buffer
 	buff := append(make([]byte, 0, 4*1024), xmlPrefix...)
 
-	// pipeline
-	it := pump.Iter(pump.Bind(source(numItems), converter))
-
 	// read the news and write out XML
-	for news := range it.All {
+	err = convert(source(numItems), func(news *NewsItem) error {
 		// title
 		buff = append(xmlutil.AppendEscaped(buff[:xmlPrefixLen], news.title), "</title><description>"...)
 
@@ -87,17 +84,15 @@ func theApp() (err error) {
 		buff = append(news.ts.AppendFormat(buff, time.RFC1123Z), "</pubDate></item>\n"...)
 
 		// write
-		if err = write(buff); err != nil {
-			return
-		}
-	}
-
-	if it.Err != nil {
-		return it.Err
-	}
+		return write(buff)
+	})
 
 	// XML footer
-	return writeString("</channel>\n</rss>\n")
+	if err == nil {
+		err = writeString("</channel>\n</rss>\n")
+	}
+
+	return
 }
 
 // raw news item
@@ -211,8 +206,8 @@ func source(numItems int) pump.Gen[*RawNewsItem] {
 	}
 }
 
-// converter (a pipeline stage)
-func converter(src pump.Gen[*RawNewsItem], yield func(*NewsItem) error) error {
+// convert RawNewsItem to NewsItem (a pipeline stage)
+func convert(src pump.Gen[*RawNewsItem], yield func(*NewsItem) error) error {
 	return src(func(item *RawNewsItem) error {
 		// news item
 		news := NewsItem{
