@@ -64,13 +64,13 @@ func theApp() (err error) {
 	}
 
 	// buffer
-	buff := append(make([]byte, 0, 8*1024), xmlPrefix...)
+	buff := append(make([]byte, 0, 4*1024), xmlPrefix...)
 
 	// pipeline
-	src := pump.From(pump.Bind(source(numItems), converter))
+	it := pump.Iter(pump.Bind(source(numItems), converter))
 
 	// read the news and write out XML
-	for news := range src.All {
+	for news := range it.All {
 		// title
 		buff = append(xmlutil.AppendEscaped(buff[:xmlPrefixLen], news.title), "</title><description>"...)
 
@@ -92,8 +92,8 @@ func theApp() (err error) {
 		}
 	}
 
-	if src.Err != nil {
-		return src.Err
+	if it.Err != nil {
+		return it.Err
 	}
 
 	// XML footer
